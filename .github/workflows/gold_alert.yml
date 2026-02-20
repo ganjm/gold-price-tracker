@@ -1,10 +1,8 @@
 name: Daily Gold Alert
-
 on:
   schedule:
-    # 4:00 AM UTC aligns with 12:00 PM (Noon) Australian Western Standard Time
     - cron: '0 4 * * *'
-  workflow_dispatch: # This allows you to run it manually for testing
+  workflow_dispatch: 
 
 jobs:
   check-gold-price:
@@ -12,18 +10,14 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install Dependencies
         run: pip install yfinance
-
       - name: Run Gold Alert Script
         env:
-          # This section connects your "Secrets" to the Python script
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SECONDARY_GMAIL_ADDRESS: ${{ secrets.SECONDARY_GMAIL_ADDRESS }}
