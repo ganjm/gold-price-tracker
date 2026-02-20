@@ -7,7 +7,7 @@ import os
 TARGET_PRICE_AUD = 235.00
 OUNCE_TO_GRAMS = 31.1034768
 
-# Map the emails to their preferred languages
+# This tells Python to go to the GitHub "Vault" to find the addresses
 RECEIVERS = {
     os.environ.get("GMAIL_ADDRESS"): "English",
     os.environ.get("SECONDARY_GMAIL_ADDRESS"): "Mandarin"
