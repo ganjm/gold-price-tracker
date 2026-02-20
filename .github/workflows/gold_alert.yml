@@ -2,10 +2,12 @@ name: Daily Gold Alert
 
 on:
   schedule:
-    # 02:00 UTC = 10:00 AM AWST (Perth Time)
-    # 14:00 UTC = 10:00 PM AWST (Perth Time)
     - cron: '0 2,14 * * *'
-  workflow_dispatch: # Manual "Run" button
+  workflow_dispatch:
+
+# 新增权限设置，允许脚本修改仓库内容
+permissions:
+  contents: write
 
 jobs:
   check-gold-price:
@@ -20,7 +22,6 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        # We added pandas here so the script can calculate averages
         run: pip install yfinance pandas
 
       - name: Run Gold Alert Script
@@ -29,3 +30,13 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SECONDARY_GMAIL_ADDRESS: ${{ secrets.SECONDARY_GMAIL_ADDRESS }}
         run: python gold_alert.py
+
+      # 新增步骤：自动提交更新后的 CSV 文件回仓库
+      - name: Commit and Push Passbook
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add gold_passbook.csv
+          # 如果文件没变（比如周末市场没开），就不提交，防止报错
+          git commit -m "Update Gold Passbook [skip ci]" || echo "No changes to commit"
+          git push
