@@ -20,4 +20,5 @@ jobs:
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SECONDARY_GMAIL_ADDRESS: ${{ secrets.SECONDARY_GMAIL_ADDRESS }}
         run: python gold_alert.py
