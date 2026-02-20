@@ -2,10 +2,10 @@ name: Daily Gold Alert
 
 on:
   schedule:
-    # 02:00 UTC = 10:00 AM AWST
-    # 14:00 UTC = 10:00 PM AWST
+    # 02:00 UTC = 10:00 AM AWST (Perth Time)
+    # 14:00 UTC = 10:00 PM AWST (Perth Time)
     - cron: '0 2,14 * * *'
-  workflow_dispatch: # Allows you to run it manually for testing
+  workflow_dispatch: # Manual "Run" button
 
 jobs:
   check-gold-price:
@@ -20,7 +20,8 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install yfinance
+        # We added pandas here so the script can calculate averages
+        run: pip install yfinance pandas
 
       - name: Run Gold Alert Script
         env:
