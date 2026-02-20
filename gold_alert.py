@@ -8,7 +8,7 @@ import pandas as pd
 DIP_PERCENTAGE = 0.05  
 OUNCE_TO_GRAMS = 31.1034768
 EST_PREMIUM = 1.15     
-# Direct link to the 1g Minted Bar page
+# Direct link to your specific product for 1-click verification
 PERTH_MINT_1G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-1g-minted-gold-bar/"
 
 RECEIVERS = {
@@ -34,20 +34,21 @@ target_aud = avg_aud_gram * (1 - DIP_PERCENTAGE)
 # 4. Create 5-Day Trend Tables
 last_5_days = hist_data['Close'].tail(5).iloc[::-1]
 trend_en = "Last 5 Days (Spot AUD/g):\n"
-trend_zh = "最近5日金价趋势 (现货 AUD/克):\n"
+trend_zh = "最近5日金价趋势 (现货):\n"
 
 for date, price in last_5_days.items():
     p_aud = (price / OUNCE_TO_GRAMS) * aud_rate
-    trend_en += f"{date.strftime('%d %b')}: ${p_aud:.2f}\n"
-    trend_zh += f"{date.strftime('%m月%d日')}: ${p_aud:.2f} AUD\n"
+    p_cny = (price / OUNCE_TO_GRAMS) * cny_rate
+    trend_en += f"• {date.strftime('%d %b')}: ${p_aud:.2f}\n"
+    trend_zh += f"• {date.strftime('%m月%d日')}: ¥{p_cny:.2f} RMB (${p_aud:.2f} AUD)\n"
 
 # 5. Build Content Blocks
 is_urgent = spot_aud <= target_aud
 
 strategy_en = (
-    "STRATEGY:\n"
+    "STRATEGY FOR USING THIS DATA:\n"
     "• Dropping 3+ days? Wait 24h for a possible lower 'floor'.\n"
-    "• Price higher than yesterday? The 'bounce' may have started; buy now."
+    "• Price higher than yesterday? The 'bounce' may have started; head to Hay Street immediately."
 )
 
 strategy_zh = (
@@ -70,9 +71,9 @@ english_block = (
 mandarin_block = (
     f"--- 中文报告 ---\n"
     f"市场现货价: ¥{spot_cny:.2f} RMB/克 (${spot_aud:.2f} AUD)\n"
-    f"预计门店价: ¥{spot_cny * EST_PREMIUM:.2f} RMB/克 (含15%溢价)\n"
-    f"50日均线价: ¥{(avg_aud_gram/aud_rate*cny_rate):.2f} RMB/克\n"
-    f"目标价格 (5% 跌幅): ¥{(target_aud/aud_rate*cny_rate):.2f} RMB/克\n\n"
+    f"预计门店价: ¥{spot_cny * EST_PREMIUM:.2f} RMB/克 (${spot_aud * EST_PREMIUM:.2f} AUD)\n"
+    f"50日均线价: ¥{(avg_aud_gram/aud_rate*cny_rate):.2f} RMB/克 (${avg_aud_gram:.2f} AUD)\n"
+    f"目标价格 (5% 跌幅): ¥{(target_aud/aud_rate*cny_rate):.2f} RMB/克 (${target_aud:.2f} AUD)\n\n"
     f"{trend_zh}\n"
     f"{strategy_zh}\n\n"
     f"珀斯铸币局1克金条价格: {PERTH_MINT_1G_URL}\n"
