@@ -7,97 +7,97 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-# 1. SETTINGS
+# 1. SETTINGS & 2026 WA PUBLIC HOLIDAY CALENDAR
 DIP_PERCENTAGE = 0.05  
 OUNCE_TO_GRAMS = 31.1034768
-EST_PREMIUM = 1.15     
-PERTH_MINT_1G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-1g-minted-gold-bar/"
+PM_1G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-1g-minted-gold-bar/"
+PM_5G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-5g-minted-gold-bar/"
+
+# Official 2026 WA Public Holidays
+WA_HOLIDAYS_2026 = {
+    "2026-01-01": "New Year's Day",
+    "2026-01-26": "Australia Day",
+    "2026-03-02": "Labour Day",
+    "2026-04-03": "Good Friday",
+    "2026-04-05": "Easter Sunday",
+    "2026-04-06": "Easter Monday",
+    "2026-04-25": "Anzac Day",
+    "2026-04-27": "Anzac Day Holiday",
+    "2026-06-01": "Western Australia Day",
+    "2026-09-28": "King's Birthday",
+    "2026-12-25": "Christmas Day",
+    "2026-12-26": "Boxing Day",
+    "2026-12-28": "Boxing Day Holiday"
+}
 
 RECEIVERS = {
     os.environ.get("GMAIL_ADDRESS"): "Bilingual",
     os.environ.get("SECONDARY_GMAIL_ADDRESS"): "Mandarin"
 }
 
-# --- ENHANCED: Scrape Perth Mint Price with Status Detection ---
-def get_perth_mint_data():
+# 2. STATUS CHECKER
+def get_trading_status():
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    
+    # Check for Sunday first
+    if now.weekday() == 6:  # 6 is Sunday
+        return "Bullion Trading closed on Sunday"
+    
+    # Check for Public Holidays
+    if today_str in WA_HOLIDAYS_2026:
+        holiday_name = WA_HOLIDAYS_2026[today_str]
+        return f"Bullion Trading closed on Public Holiday ({holiday_name})"
+    
+    return "OPEN (Arrive by 4:00 PM)"
+
+# 3. DATA FETCHING (Gold & Scraping)
+def get_pm_price(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(PERTH_MINT_1G_URL, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Check for "Unavailable" or "Closed" indicators
-        page_text = soup.get_text().lower()
-        if "pricing is unavailable" in page_text or "buying closed" in page_text or "unavailable" in page_text:
-            return "Closed"
-            
         price_tag = soup.find('span', {'class': 'price'})
-        if price_tag:
-            clean_price = float(price_tag.text.replace('$', '').replace(',', '').strip())
-            return clean_price
-        return None
+        return float(price_tag.text.replace('$', '').replace(',', '').strip()) if price_tag else None
     except Exception:
         return None
 
-# 2. Fetch Market Data
+# Fetch Market Data
 gold_ticker = yf.Ticker("GC=F")
 hist_data = gold_ticker.history(period="250d")
-moving_avg_50 = hist_data['Close'].rolling(window=50).mean().iloc[-1]
-moving_avg_200 = hist_data['Close'].rolling(window=200).mean().iloc[-1]
-current_usd = hist_data['Close'].iloc[-1]
-aud_rate = yf.Ticker("AUD=X").history(period="1d")['Close'].iloc[-1]
-cny_rate = yf.Ticker("CNY=X").history(period="1d")['Close'].iloc[-1]
+spot_aud = (hist_data['Close'].iloc[-1] / OUNCE_TO_GRAMS) * yf.Ticker("AUD=X").history(period="1d")['Close'].iloc[-1]
 
-# 3. Calculations
-spot_aud = (current_usd / OUNCE_TO_GRAMS) * aud_rate
-spot_cny = (current_usd / OUNCE_TO_GRAMS) * cny_rate
-avg_50_aud = (moving_avg_50 / OUNCE_TO_GRAMS) * aud_rate
-avg_200_aud = (moving_avg_200 / OUNCE_TO_GRAMS) * aud_rate
-target_aud = avg_50_aud * (1 - DIP_PERCENTAGE)
+status_msg = get_trading_status()
+p1g = get_pm_price(PM_1G_URL)
+p5g = get_pm_price(PM_5G_URL)
 
-# Handle the Scraped Status
-retail_status = get_perth_mint_data()
-real_retail_aud = retail_status if isinstance(retail_status, float) else None
-real_retail_cny = (real_retail_aud / aud_rate * cny_rate) if real_retail_aud else None
+# 4. REPORT BUILDING
+def format_price(val, weight):
+    # Hide price and prompt store visit if trading is closed
+    if "closed" in status_msg.lower():
+        return f"Official {weight} Price: [VISIT STORE NEXT TRADING DAY]"
+    return f"Official {weight} Price: ${val:.2f} AUD" if val else f"Official {weight} Price: [Check Link]"
 
-# 4. Content Logic
-is_urgent = spot_aud <= target_aud
-
-if retail_status == "Closed":
-    retail_info_en = "Official Perth Mint Price: CLOSED/UNAVAILABLE. Please visit the East Perth store for live quotes."
-    retail_info_zh = "珀斯铸币局官方价: 暂时关闭或不可用。请直接前往 East Perth 门店咨询实时报价。"
-elif real_retail_aud:
-    retail_info_en = f"Official Perth Mint 1g Price: ${real_retail_aud:.2f} AUD"
-    retail_info_zh = f"珀斯铸币局官方1克价格: ¥{real_retail_cny:.2f} RMB (${real_retail_aud:.2f} AUD)"
-else:
-    retail_info_en = "Official Perth Mint Price: [Unavailable - Check Link Below]"
-    retail_info_zh = "珀斯铸币局官方价格: [暂时不可用 - 请点击下方链接确认]"
-
-# (Trend Table and Strategy text logic same as before)
-last_5_days = hist_data['Close'].tail(5).iloc[::-1]
-trend_zh = "最近5日金价趋势 (现货):\n"
-for date, price in last_5_days.items():
-    p_aud = (price / OUNCE_TO_GRAMS) * aud_rate
-    p_cny = (price / OUNCE_TO_GRAMS) * cny_rate
-    trend_zh += f"• {date.strftime('%m月%d日')}: ¥{p_cny:.2f} RMB (${p_aud:.2f} AUD)\n"
-
-ma_explanation_zh = "均线小知识:\n• 50日线: 中期趋势。低5%是抄底机会。\n• 200日线: 长期牛熊线。接近此线是极佳买点。"
-strategy_zh = "建议策略:\n• 连跌3天+? 可再等24h。\n• 今日反弹? 建议立即购买。"
-
-mandarin_block = (
-    f"--- 中文报告 ---\n"
-    f"市场现货价: ¥{spot_cny:.2f} RMB (${spot_aud:.2f} AUD)\n"
-    f"{retail_info_zh}\n"
-    f"50日均线价: ¥{(avg_50_aud/aud_rate*cny_rate):.2f} RMB (${avg_50_aud:.2f} AUD)\n"
-    f"200日均线价: ¥{(avg_200_aud/aud_rate*cny_rate):.2f} RMB (${avg_200_aud:.2f} AUD)\n\n"
-    f"{ma_explanation_zh}\n\n"
-    f"{trend_zh}\n"
-    f"{strategy_zh}\n\n"
-    f"直达链接: {PERTH_MINT_1G_URL}\n"
+report_en = (
+    f"--- PERTH MINT STATUS ---\n"
+    f"{status_msg}\n\n"
+    f"Market Spot: ${spot_aud:.2f} AUD/g\n"
+    f"{format_price(p1g, '1g')}\n"
+    f"{format_price(p5g, '5g')}\n"
 )
 
-# Email Delivery (Shortened for brevity)
+report_zh = (
+    f"--- 珀斯铸币局状态 ---\n"
+    f"{status_msg.replace('Bullion Trading closed on Sunday', '交易中心周日关闭').replace('Bullion Trading closed on Public Holiday', '交易中心公休日关闭')}\n\n"
+    f"市场现货价: ${spot_aud:.2f} AUD\n"
+    f"{format_price(p1g, '1克').replace('VISIT STORE', '请在营业日前往门店')}\n"
+    f"{format_price(p5g, '5克')}\n"
+)
+
+# 5. DELIVERY
 sender_email = os.environ.get("GMAIL_ADDRESS")
 app_password = os.environ.get("GMAIL_APP_PASSWORD")
+
 with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
     smtp.login(sender_email, app_password)
     for email, mode in RECEIVERS.items():
@@ -105,6 +105,6 @@ with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         msg = EmailMessage()
         msg['From'] = sender_email
         msg['To'] = email
-        msg['Subject'] = f"{'!! URGENT !! ' if is_urgent else ''}Gold Update: ${spot_aud:.2f} AUD"
-        msg.set_content(mandarin_block if mode == "Mandarin" else f"--- ENGLISH REPORT ---\nSpot: ${spot_aud:.2f}\n{retail_info_en}\n\n{mandarin_block}")
+        msg['Subject'] = f"Gold Alert: ${spot_aud:.2f} AUD ({status_msg})"
+        msg.set_content(f"{report_en}\n{report_zh}" if mode == "Bilingual" else report_zh)
         smtp.send_message(msg)
