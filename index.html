@@ -1,50 +1,94 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Nadia's Gold Dashboard</title>
+    <title>JM's Gold Price Tracker</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        canvas { width: 100% !important; }
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f0f2f5; color: #1c1e21; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .stat-card { padding: 20px; border-radius: 12px; background: #fff; border: 1px solid #e4e6eb; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #d4af37; margin-top: 5px; }
+        .stat-label { font-size: 14px; color: #65676b; text-transform: uppercase; letter-spacing: 1px; }
+        .update-time { text-align: center; font-size: 12px; color: #90949c; margin-bottom: 30px; font-style: italic; }
+        canvas { width: 100% !important; height: 400px !important; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🪙 Gold Price Trend (AUD/g)</h2>
+        <h1 style="text-align: center; margin-bottom: 10px;">🪙 My Gold Portfolio</h1>
+        <div id="lastUpdated" class="update-time">Loading latest data...</div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Holdings</div>
+                <div id="totalGrams" class="stat-value">-- g</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Live Profit/Loss</div>
+                <div id="liveProfit" class="stat-value">--</div>
+            </div>
+        </div>
+
         <canvas id="goldChart"></canvas>
     </div>
 
     <script>
-        Papa.parse("gold_passbook.csv", {
-            download: true,
-            header: true,
-            complete: function(results) {
-                const data = results.data.filter(row => row.Date);
-                const labels = data.map(row => row.Date);
-                const prices = data.map(row => row.Spot_AUD_g);
-                const ma50 = data.map(row => row.MA50_AUD);
+        Promise.all([
+            new Promise(res => Papa.parse("gold_passbook.csv", {download: true, header: true, complete: res})),
+            new Promise(res => Papa.parse("my_holdings.csv", {download: true, header: true, complete: res}))
+        ]).then(([passbookRes, holdingsRes]) => {
+            const history = passbookRes.data.filter(row => row.Date);
+            const latestEntry = history[history.length - 1];
+            const currentPrice = parseFloat(latestEntry.Spot_AUD_g);
+            
+            // Update Timestamp
+            document.getElementById('lastUpdated').innerText = "Last Updated: " + latestEntry.Date + " AWST";
 
-                new Chart(document.getElementById('goldChart'), {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Spot Price',
-                            data: prices,
-                            borderColor: '#d4af37',
-                            fill: false
-                        }, {
-                            label: '50-Day Avg',
-                            data: ma50,
-                            borderColor: '#999',
-                            borderDash: [5, 5],
-                            fill: false
-                        }]
-                    }
-                });
-            }
+            // Calculate Holdings
+            let totalGrams = 0;
+            let totalCost = 0;
+            holdingsRes.data.filter(row => row.Grams).forEach(row => {
+                const g = parseFloat(row.Grams);
+                totalGrams += g;
+                totalCost += (g * parseFloat(row.Price_Paid_AUD));
+            });
+
+            const currentVal = totalGrams * currentPrice;
+            const profit = currentVal - totalCost;
+
+            // Update UI
+            document.getElementById('totalGrams').innerText = totalGrams.toFixed(1) + " g";
+            document.getElementById('liveProfit').innerText = (profit >= 0 ? "+" : "") + "$" + profit.toFixed(2) + " AUD";
+            document.getElementById('liveProfit').style.color = profit >= 0 ? "#28a745" : "#dc3545";
+
+            // Draw Chart
+            new Chart(document.getElementById('goldChart'), {
+                type: 'line',
+                data: {
+                    labels: history.map(row => row.Date),
+                    datasets: [{
+                        label: 'Spot Price (AUD/g)',
+                        data: history.map(row => row.Spot_AUD_g),
+                        borderColor: '#d4af37',
+                        backgroundColor: 'rgba(212, 175, 55, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }, {
+                        label: '50-Day Avg',
+                        data: history.map(row => row.MA50_AUD),
+                        borderColor: '#adb5bd',
+                        borderDash: [5, 5],
+                        fill: false
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    plugins: { legend: { position: 'bottom' } },
+                    scales: { x: { display: false } } // Keeps mobile view clean
+                }
+            });
         });
     </script>
 </body>
