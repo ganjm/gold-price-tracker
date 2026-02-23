@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nadia's Gold Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        canvas { width: 100% !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🪙 Gold Price Trend (AUD/g)</h2>
+        <canvas id="goldChart"></canvas>
+    </div>
+
+    <script>
+        Papa.parse("gold_passbook.csv", {
+            download: true,
+            header: true,
+            complete: function(results) {
+                const data = results.data.filter(row => row.Date);
+                const labels = data.map(row => row.Date);
+                const prices = data.map(row => row.Spot_AUD_g);
+                const ma50 = data.map(row => row.MA50_AUD);
+
+                new Chart(document.getElementById('goldChart'), {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Spot Price',
+                            data: prices,
+                            borderColor: '#d4af37',
+                            fill: false
+                        }, {
+                            label: '50-Day Avg',
+                            data: ma50,
+                            borderColor: '#999',
+                            borderDash: [5, 5],
+                            fill: false
+                        }]
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
