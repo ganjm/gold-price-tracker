@@ -1,93 +1,437 @@
-import yfinance as yf
-import smtplib
-from email.message import EmailMessage
+import html
 import os
-import pandas as pd
+import re
+import smtplib
+from dataclasses import dataclass
 from datetime import datetime
+from email.message import EmailMessage
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 import requests
+import yfinance as yf
 from bs4 import BeautifulSoup
 
-# 1. SETTINGS & TRADING CALENDAR 2026
-DIP_PERCENTAGE = 0.05  
+
+DIP_PERCENTAGE = 0.05
 OUNCE_TO_GRAMS = 31.1034768
+PERTH_TIMEZONE = ZoneInfo("Australia/Perth")
+PASSBOOK_PATH = Path("gold_passbook.csv")
+HOLDINGS_PATH = Path("my_holdings.csv")
 PM_1G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-1g-minted-gold-bar/"
 PM_5G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-5g-minted-gold-bar/"
+DEFAULT_TAOBAO_1G_URL = "https://e.tb.cn/h.8ZEbY3FydVeQvrb?tk=5wG9gJeMRuD"
 
 WA_HOLIDAYS_2026 = {
-    "2026-01-01": "New Year's Day", "2026-01-26": "Australia Day",
-    "2026-03-02": "Labour Day", "2026-04-03": "Good Friday",
-    "2026-04-05": "Easter Sunday", "2026-04-06": "Easter Monday",
-    "2026-04-25": "Anzac Day", "2026-04-27": "Anzac Day Holiday",
-    "2026-06-01": "Western Australia Day", "2026-09-28": "King's Birthday",
-    "2026-12-25": "Christmas Day", "2026-12-26": "Boxing Day",
-    "2026-12-28": "Boxing Day Holiday"
+    "2026-01-01": "New Year's Day",
+    "2026-01-26": "Australia Day",
+    "2026-03-02": "Labour Day",
+    "2026-04-03": "Good Friday",
+    "2026-04-05": "Easter Sunday",
+    "2026-04-06": "Easter Monday",
+    "2026-04-25": "Anzac Day",
+    "2026-04-27": "Anzac Day Holiday",
+    "2026-06-01": "Western Australia Day",
+    "2026-09-28": "King's Birthday",
+    "2026-12-25": "Christmas Day",
+    "2026-12-26": "Boxing Day",
+    "2026-12-28": "Boxing Day Holiday",
 }
 
-RECEIVERS = {
-    os.environ.get("GMAIL_ADDRESS"): "Bilingual",
-    os.environ.get("SECONDARY_GMAIL_ADDRESS"): "Mandarin"
-}
 
-# 2. STATUS & SCRAPING LOGIC
-def get_trading_status():
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    if now.weekday() == 5: return "OPEN (Saturday Trading 9am-5pm)"
-    if now.weekday() == 6: return "Bullion Trading closed on Sunday"
-    if today_str in WA_HOLIDAYS_2026:
-        return f"Bullion Trading closed on Public Holiday ({WA_HOLIDAYS_2026[today_str]})"
-    return "OPEN (Mon-Fri 9am-5pm)"
+@dataclass(frozen=True)
+class MarketSnapshot:
+    captured_at: datetime
+    spot_aud: float
+    spot_cny: float
+    daily_change_pct: float
+    ma50_aud: float
+    ma200_aud: float
+    pm_1g: float | None
+    pm_5g: float | None
+    taobao_1g_cny: float | None = None
+    taobao_5g_cny: float | None = None
+    portfolio_grams: float = 0.0
+    portfolio_cost_aud: float = 0.0
 
-def get_pm_price(url):
+
+def get_trading_status(now: datetime | None = None) -> tuple[str, bool]:
+    now = now or datetime.now(PERTH_TIMEZONE)
+    local_now = now.astimezone(PERTH_TIMEZONE)
+    today = local_now.strftime("%Y-%m-%d")
+
+    if today in WA_HOLIDAYS_2026:
+        return f"Closed — {WA_HOLIDAYS_2026[today]}", False
+    if local_now.weekday() == 6:
+        return "Closed — Sunday", False
+    if 9 <= local_now.hour < 17:
+        return ("Open — Saturday 9am–5pm" if local_now.weekday() == 5 else "Open — Mon–Fri 9am–5pm"), True
+    return "Closed — trading hours are 9am–5pm", False
+
+
+def fetch_history(symbol: str, period: str) -> pd.DataFrame:
+    history = yf.Ticker(symbol).history(period=period, auto_adjust=False)
+    if history.empty or "Close" not in history:
+        raise RuntimeError(f"No market data returned for {symbol}")
+    close = history["Close"].dropna()
+    if close.empty:
+        raise RuntimeError(f"No closing prices returned for {symbol}")
+    return history.loc[close.index]
+
+
+def fetch_perth_mint_price(url: str) -> float | None:
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        price_tag = soup.find('span', {'class': 'price'})
-        return float(price_tag.text.replace('$', '').replace(',', '').strip()) if price_tag else None
-    except: return None
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; PerthGoldTracker/1.0)"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        price_tag = BeautifulSoup(response.text, "html.parser").find("span", class_="price")
+        if not price_tag:
+            return None
+        return float(price_tag.get_text(strip=True).replace("$", "").replace(",", ""))
+    except (requests.RequestException, AttributeError, TypeError, ValueError):
+        return None
 
-# 3. CALCULATIONS
-status_msg = get_trading_status()
-is_open = "OPEN" in status_msg
-gold_ticker = yf.Ticker("GC=F")
-hist = gold_ticker.history(period="250d")
-aud_rate = yf.Ticker("AUD=X").history(period="1d")['Close'].iloc[-1]
-cny_rate = yf.Ticker("CNY=X").history(period="1d")['Close'].iloc[-1]
 
-spot_aud = (hist['Close'].iloc[-1] / OUNCE_TO_GRAMS) * aud_rate
-spot_cny = spot_aud / aud_rate * cny_rate
-p1g = get_pm_price(PM_1G_URL)
-p5g = get_pm_price(PM_5G_URL)
+def parse_taobao_share_price(page: str) -> float | None:
+    decoded = html.unescape(page)
+    match = re.search(r"[?&]price=(\d+(?:\.\d+)?)", decoded)
+    return float(match.group(1)) if match else None
 
-# 4. BILINGUAL FORMATTING
-def format_price(val, weight, lang="en"):
-    if val: return f"Official {weight} Price: ${val:.2f} AUD" if lang=="en" else f"官方 {weight} 价格: ¥{(val/aud_rate*cny_rate):.2f} RMB (${val:.2f} AUD)"
-    if is_open: return "Official Price: [Web pricing unavailable - VISIT STORE]" if lang=="en" else "官方价格: [网站现价不可用 - 请前往门店咨询]"
-    return "Official Price: [STORE CLOSED]" if lang=="en" else "官方价格: [门店已关闭]"
 
-report_en = (
-    f"--- PERTH MINT STATUS ---\nStatus: {status_msg}\nNote: Arrive by 4:00 PM.\n\n"
-    f"Spot: ${spot_aud:.2f} AUD/g\n{format_price(p1g, '1g', 'en')}\n{format_price(p5g, '5g', 'en')}\n\n"
-    f"STRATEGY: • Falling? Wait. • Bouncing? Buy now.\n"
-)
+def fetch_taobao_visible_price(url: str) -> float | None:
+    if not url:
+        return None
 
-report_zh = (
-    f"--- 珀斯铸币局状态 ---\n今日状态: {status_msg.replace('OPEN', '开启').replace('closed on', '关闭于')}\n注意: 请在 16:00 前到达。\n\n"
-    f"市场现货价: ¥{spot_cny:.2f} RMB (${spot_aud:.2f} AUD)\n{format_price(p1g, '1克', 'zh')}\n{format_price(p5g, '5克', 'zh')}\n\n"
-    f"建议策略: • 连跌3天+? 可再等24h。 • 今日反弹? 建议立即购买。\n"
-)
 
-# 5. DELIVERY
-sender_email = os.environ.get("GMAIL_ADDRESS")
-app_password = os.environ.get("GMAIL_APP_PASSWORD")
-with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-    smtp.login(sender_email, app_password)
-    for email, mode in RECEIVERS.items():
-        if not email: continue
-        msg = EmailMessage()
-        msg['From'] = sender_email
-        msg['To'] = email
-        msg['Subject'] = f"Gold Update: ${spot_aud:.2f} AUD ({status_msg})"
-        msg.set_content(f"{report_en}\n{report_zh}" if mode == "Bilingual" else report_zh)
-        smtp.send_message(msg)
+def load_portfolio(path: Path = HOLDINGS_PATH) -> tuple[float, float]:
+    if not path.exists():
+        return 0.0, 0.0
+    holdings = pd.read_csv(path)
+    required = {"Grams", "Price_Paid_AUD"}
+    if not required.issubset(holdings.columns):
+        raise RuntimeError(f"{path} must contain columns: {', '.join(sorted(required))}")
+    grams = pd.to_numeric(holdings["Grams"], errors="coerce")
+    unit_price = pd.to_numeric(holdings["Price_Paid_AUD"], errors="coerce")
+    valid = grams.notna() & unit_price.notna() & (grams > 0) & (unit_price >= 0)
+    return float(grams[valid].sum()), float((grams[valid] * unit_price[valid]).sum())
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        return parse_taobao_share_price(response.text)
+    except requests.RequestException:
+        return None
+
+
+def collect_snapshot(now: datetime | None = None) -> MarketSnapshot:
+    captured_at = now or datetime.now(PERTH_TIMEZONE)
+    gold = fetch_history("GC=F", "1y")["Close"].dropna()
+    if len(gold) < 200:
+        raise RuntimeError(f"Only {len(gold)} gold observations returned; 200 are required")
+
+    aud_usd = float(fetch_history("AUDUSD=X", "5d")["Close"].dropna().iloc[-1])
+    usd_cny = float(fetch_history("CNY=X", "5d")["Close"].dropna().iloc[-1])
+    if aud_usd <= 0 or usd_cny <= 0:
+        raise RuntimeError("Invalid foreign-exchange rate returned")
+
+    gold_usd_per_gram = gold / OUNCE_TO_GRAMS
+    gold_aud_per_gram = gold_usd_per_gram / aud_usd
+    spot_aud = float(gold_aud_per_gram.iloc[-1])
+    spot_cny = float(gold_usd_per_gram.iloc[-1] * usd_cny)
+    daily_change_pct = float(gold.iloc[-1] / gold.iloc[-2] - 1) * 100
+    taobao_1g_url = os.environ.get("TAOBAO_1G_URL", "").strip() or DEFAULT_TAOBAO_1G_URL
+    taobao_5g_url = os.environ.get("TAOBAO_5G_URL", "").strip()
+    taobao_1g_cny = fetch_taobao_visible_price(taobao_1g_url)
+    taobao_5g_cny = fetch_taobao_visible_price(taobao_5g_url)
+    if taobao_5g_cny is None and taobao_1g_cny is not None:
+        taobao_5g_cny = taobao_1g_cny * 5
+    portfolio_grams, portfolio_cost_aud = load_portfolio()
+
+    return MarketSnapshot(
+        captured_at=captured_at.astimezone(PERTH_TIMEZONE),
+        spot_aud=spot_aud,
+        spot_cny=spot_cny,
+        daily_change_pct=daily_change_pct,
+        ma50_aud=float(gold_aud_per_gram.tail(50).mean()),
+        ma200_aud=float(gold_aud_per_gram.tail(200).mean()),
+        pm_1g=fetch_perth_mint_price(PM_1G_URL),
+        pm_5g=fetch_perth_mint_price(PM_5G_URL),
+        taobao_1g_cny=taobao_1g_cny,
+        taobao_5g_cny=taobao_5g_cny,
+        portfolio_grams=portfolio_grams,
+        portfolio_cost_aud=portfolio_cost_aud,
+    )
+
+
+def get_signal(snapshot: MarketSnapshot) -> tuple[str, str, str]:
+    dip_target = snapshot.ma50_aud * (1 - DIP_PERCENTAGE)
+    if snapshot.spot_aud <= dip_target:
+        return "BUY ZONE", "Spot is at least 5% below its 50-day average.", "#166534"
+    if snapshot.spot_aud < snapshot.ma50_aud:
+        return "WATCH", "Spot is below its 50-day average, but not yet at the 5% target.", "#a16207"
+    return "WAIT", "Spot is at or above its 50-day average.", "#475569"
+
+
+def premium(price: float | None, grams: int, spot_aud: float) -> float | None:
+    if price is None:
+        return None
+    return (price / grams / spot_aud - 1) * 100
+
+
+def price_text(price: float | None, grams: int, spot_aud: float) -> str:
+    if price is None:
+        return "Unavailable"
+    markup = premium(price, grams, spot_aud)
+    return f"${price:,.2f} AUD ({markup:+.1f}% premium)"
+
+
+def taobao_price_text(price_cny: float | None, grams: int, snapshot: MarketSnapshot) -> str:
+    if price_cny is None:
+        return "Unavailable"
+    cny_per_aud = snapshot.spot_cny / snapshot.spot_aud
+    price_aud = price_cny / cny_per_aud
+    markup = (price_cny / grams / snapshot.spot_cny - 1) * 100
+    return f"¥{price_cny:,.2f} / A${price_aud:,.2f} ({markup:+.1f}% premium)"
+
+
+def portfolio_metrics(snapshot: MarketSnapshot) -> tuple[float, float, float]:
+    market_value = snapshot.portfolio_grams * snapshot.spot_aud
+    profit = market_value - snapshot.portfolio_cost_aud
+    return_pct = (profit / snapshot.portfolio_cost_aud * 100) if snapshot.portfolio_cost_aud else 0.0
+    return market_value, profit, return_pct
+
+
+def build_chinese_summary(snapshot: MarketSnapshot, store_status: str) -> str:
+    signal, _, _ = get_signal(snapshot)
+    signal_zh = {"BUY ZONE": "买入区间", "WATCH": "关注", "WAIT": "等待"}[signal]
+    reason_zh = {
+        "BUY ZONE": "现货价比50日均价低至少5%。",
+        "WATCH": "现货价低于50日均价，但尚未达到5%的目标跌幅。",
+        "WAIT": "现货价等于或高于50日均价。",
+    }[signal]
+    market_value, profit, return_pct = portfolio_metrics(snapshot)
+    return f"""黄金更新（珀斯时间 {snapshot.captured_at:%Y-%m-%d %H:%M}）
+信号：{signal_zh} — {reason_zh}
+现货：A${snapshot.spot_aud:,.2f}/克 | ¥{snapshot.spot_cny:,.2f}/克
+日变动：{snapshot.daily_change_pct:+.2f}%
+50日均价：A${snapshot.ma50_aud:,.2f}/克
+200日均价：A${snapshot.ma200_aud:,.2f}/克
+珀斯铸币局：{store_status}
+1克金条：{price_text(snapshot.pm_1g, 1, snapshot.spot_aud)}
+5克金条：{price_text(snapshot.pm_5g, 5, snapshot.spot_aud)}
+淘宝领丰金1克：{taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}
+淘宝领丰金5克（按1克价×5估算）：{taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}
+持仓：{snapshot.portfolio_grams:g}克 | 成本 A${snapshot.portfolio_cost_aud:,.2f} | 市值 A${market_value:,.2f} | 浮动盈亏 A${profit:+,.2f}（{return_pct:+.1f}%）
+仅供市场跟踪，不构成投资建议。"""
+
+
+def build_plain_report(snapshot: MarketSnapshot, store_status: str, bilingual: bool = True) -> str:
+    signal, reason, _ = get_signal(snapshot)
+    ma50_distance = (snapshot.spot_aud / snapshot.ma50_aud - 1) * 100
+    ma200_distance = (snapshot.spot_aud / snapshot.ma200_aud - 1) * 100
+    market_value, profit, return_pct = portfolio_metrics(snapshot)
+    return f"""PERTH GOLD UPDATE
+{snapshot.captured_at:%A, %d %B %Y at %I:%M %p} AWST
+
+SIGNAL: {signal}
+{reason}
+
+MARKET
+Spot: ${snapshot.spot_aud:,.2f} AUD/g | ¥{snapshot.spot_cny:,.2f} CNY/g
+Daily move: {snapshot.daily_change_pct:+.2f}%
+50-day average: ${snapshot.ma50_aud:,.2f} AUD/g ({ma50_distance:+.2f}%)
+200-day average: ${snapshot.ma200_aud:,.2f} AUD/g ({ma200_distance:+.2f}%)
+
+PERTH MINT
+Store: {store_status}
+1g bar: {price_text(snapshot.pm_1g, 1, snapshot.spot_aud)}
+5g bar: {price_text(snapshot.pm_5g, 5, snapshot.spot_aud)}
+
+TAOBAO (VISIBLE PRICE)
+Lingfeng 1g: {taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}
+Lingfeng 5g (5× 1g estimate): {taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}
+
+YOUR HOLDINGS
+Gold: {snapshot.portfolio_grams:g}g
+Cost basis: ${snapshot.portfolio_cost_aud:,.2f} AUD
+Spot value: ${market_value:,.2f} AUD
+Unrealized P/L: ${profit:+,.2f} AUD ({return_pct:+.1f}%)
+
+This is a market-tracking alert, not financial advice. Retail prices may change before purchase.
+""" + (f"\n中文摘要\n{build_chinese_summary(snapshot, store_status)}\n" if bilingual else "")
+
+
+def metric_row(label: str, value: str) -> str:
+    return (
+        '<tr><td style="padding:8px 0;color:#64748b;font-size:14px;">'
+        f"{html.escape(label)}</td><td style=\"padding:8px 0;text-align:right;font-weight:700;font-size:14px;\">{html.escape(value)}</td></tr>"
+    )
+
+
+def build_html_report(snapshot: MarketSnapshot, store_status: str, bilingual: bool = True) -> str:
+    signal, reason, signal_colour = get_signal(snapshot)
+    ma50_distance = (snapshot.spot_aud / snapshot.ma50_aud - 1) * 100
+    ma200_distance = (snapshot.spot_aud / snapshot.ma200_aud - 1) * 100
+    market_value, profit, return_pct = portfolio_metrics(snapshot)
+    market_rows = "".join([
+        metric_row("Spot (AUD)", f"${snapshot.spot_aud:,.2f} / g"),
+        metric_row("Spot (CNY)", f"¥{snapshot.spot_cny:,.2f} / g"),
+        metric_row("Daily move", f"{snapshot.daily_change_pct:+.2f}%"),
+        metric_row("vs 50-day average", f"{ma50_distance:+.2f}%"),
+        metric_row("vs 200-day average", f"{ma200_distance:+.2f}%"),
+    ])
+    mint_rows = "".join([
+        metric_row("Store", store_status),
+        metric_row("1g minted bar", price_text(snapshot.pm_1g, 1, snapshot.spot_aud)),
+        metric_row("5g minted bar", price_text(snapshot.pm_5g, 5, snapshot.spot_aud)),
+    ])
+    taobao_rows = "".join([
+        metric_row("Lingfeng 1g", taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)),
+        metric_row("Lingfeng 5g (5× estimate)", taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)),
+    ])
+    portfolio_rows = "".join([
+        metric_row("Gold held", f"{snapshot.portfolio_grams:g}g"),
+        metric_row("Cost basis", f"${snapshot.portfolio_cost_aud:,.2f} AUD"),
+        metric_row("Spot value", f"${market_value:,.2f} AUD"),
+        metric_row("Unrealized P/L", f"${profit:+,.2f} AUD ({return_pct:+.1f}%)"),
+    ])
+    chinese_card = ""
+    if bilingual:
+        chinese_card = (
+            '<div style="margin-top:24px;background:#fffbeb;padding:16px;border-radius:8px;white-space:pre-line;'
+            'font-size:14px;line-height:1.6;">'
+            '<strong>中文摘要</strong><br>'
+            f"{html.escape(build_chinese_summary(snapshot, store_status))}</div>"
+        )
+
+    return f"""<!doctype html>
+<html><body style="margin:0;background:#f1f5f9;font-family:Arial,sans-serif;color:#0f172a;">
+<div style="display:none;max-height:0;overflow:hidden;">{html.escape(signal)} — gold is {snapshot.daily_change_pct:+.2f}% today.</div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:20px 8px;"><tr><td align="center">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:16px;overflow:hidden;">
+<tr><td style="background:#0f172a;padding:24px;color:#ffffff;">
+  <div style="font-size:12px;letter-spacing:1.5px;color:#fbbf24;font-weight:700;">PERTH GOLD UPDATE</div>
+  <div style="font-size:26px;font-weight:800;margin-top:8px;">${snapshot.spot_aud:,.2f} AUD/g</div>
+  <div style="font-size:13px;color:#cbd5e1;margin-top:6px;">{snapshot.captured_at:%A, %d %B %Y · %I:%M %p} AWST</div>
+</td></tr>
+<tr><td style="padding:24px;">
+  <div style="border-left:5px solid {signal_colour};background:#f8fafc;padding:16px;border-radius:8px;">
+    <div style="font-size:12px;color:{signal_colour};font-weight:800;letter-spacing:1px;">{html.escape(signal)}</div>
+    <div style="font-size:15px;margin-top:6px;line-height:1.45;">{html.escape(reason)}</div>
+  </div>
+  <h2 style="font-size:16px;margin:26px 0 8px;">Market snapshot</h2>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{market_rows}</table>
+  <h2 style="font-size:16px;margin:26px 0 8px;">Perth Mint</h2>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{mint_rows}</table>
+  <h2 style="font-size:16px;margin:26px 0 8px;">Taobao visible price</h2>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{taobao_rows}</table>
+  <h2 style="font-size:16px;margin:26px 0 8px;">Your holdings</h2>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{portfolio_rows}</table>
+  {chinese_card}
+  <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:11px;line-height:1.5;">
+    Market-tracking alert only; not financial advice. Retail prices may change before purchase.
+  </div>
+</td></tr></table>
+</td></tr></table>
+</body></html>"""
+
+
+def build_mandarin_html_report(snapshot: MarketSnapshot, store_status: str) -> str:
+    signal = {"BUY ZONE": "买入区间", "WATCH": "关注", "WAIT": "等待"}[get_signal(snapshot)[0]]
+    content = html.escape(build_chinese_summary(snapshot, store_status)).replace("\n", "<br>")
+    return f"""<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:Arial,sans-serif;color:#0f172a;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:20px 8px;"><tr><td align="center">
+<table role="presentation" width="100%" style="max-width:620px;background:#fff;border-radius:16px;overflow:hidden;">
+<tr><td style="background:#0f172a;padding:24px;color:#fff;"><div style="color:#fbbf24;font-size:12px;font-weight:700;">珀斯黄金更新</div>
+<div style="font-size:26px;font-weight:800;margin-top:8px;">A${snapshot.spot_aud:,.2f}/克</div></td></tr>
+<tr><td style="padding:24px;"><div style="font-size:18px;font-weight:800;margin-bottom:14px;">{signal}</div>
+<div style="font-size:14px;line-height:1.8;">{content}</div></td></tr></table>
+</td></tr></table></body></html>"""
+
+
+def build_message(
+    snapshot: MarketSnapshot,
+    store_status: str,
+    sender: str,
+    recipient: str,
+    mode: str = "Bilingual",
+) -> EmailMessage:
+    signal, _, _ = get_signal(snapshot)
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = recipient
+    if mode == "Mandarin":
+        signal_zh = {"BUY ZONE": "买入区间", "WATCH": "关注", "WAIT": "等待"}[signal]
+        message["Subject"] = f"黄金{signal_zh}：A${snapshot.spot_aud:,.2f}/克（{snapshot.daily_change_pct:+.2f}%）"
+        message.set_content(build_chinese_summary(snapshot, store_status))
+        message.add_alternative(build_mandarin_html_report(snapshot, store_status), subtype="html")
+    else:
+        message["Subject"] = f"Gold {signal}: ${snapshot.spot_aud:,.2f}/g ({snapshot.daily_change_pct:+.2f}%)"
+        message.set_content(build_plain_report(snapshot, store_status, bilingual=True))
+        message.add_alternative(build_html_report(snapshot, store_status, bilingual=True), subtype="html")
+    return message
+
+
+def get_email_settings() -> tuple[str, str, list[tuple[str, str]]]:
+    sender = os.environ.get("GMAIL_ADDRESS", "").strip()
+    password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+    secondary = os.environ.get("SECONDARY_GMAIL_ADDRESS", "").strip()
+    recipients = [(sender, "Bilingual")]
+    if secondary and secondary != sender:
+        recipients.append((secondary, "Mandarin"))
+    missing = [name for name, value in {"GMAIL_ADDRESS": sender, "GMAIL_APP_PASSWORD": password}.items() if not value]
+    if missing:
+        raise RuntimeError(f"Missing required GitHub Actions secrets: {', '.join(missing)}")
+    return sender, password, recipients
+
+
+def send_reports(snapshot: MarketSnapshot, store_status: str) -> int:
+    sender, password, recipients = get_email_settings()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
+        smtp.login(sender, password)
+        for recipient, mode in recipients:
+            smtp.send_message(build_message(snapshot, store_status, sender, recipient, mode))
+    return len(recipients)
+
+
+def append_passbook(snapshot: MarketSnapshot) -> None:
+    columns = [
+        "Date", "Spot_AUD_g", "Spot_CNY_g", "MA50_AUD", "MA200_AUD",
+        "Est_Shop_AUD", "Taobao_1g_CNY", "Taobao_5g_CNY",
+    ]
+    row = pd.DataFrame([{
+        "Date": snapshot.captured_at.strftime("%Y-%m-%d %H:%M"),
+        "Spot_AUD_g": round(snapshot.spot_aud, 2),
+        "Spot_CNY_g": round(snapshot.spot_cny, 2),
+        "MA50_AUD": round(snapshot.ma50_aud, 2),
+        "MA200_AUD": round(snapshot.ma200_aud, 2),
+        "Est_Shop_AUD": round(snapshot.pm_1g, 2) if snapshot.pm_1g is not None else "N/A",
+        "Taobao_1g_CNY": round(snapshot.taobao_1g_cny, 2) if snapshot.taobao_1g_cny is not None else "N/A",
+        "Taobao_5g_CNY": round(snapshot.taobao_5g_cny, 2) if snapshot.taobao_5g_cny is not None else "N/A",
+    }], columns=columns)
+    if PASSBOOK_PATH.exists():
+        existing = pd.read_csv(PASSBOOK_PATH).reindex(columns=columns)
+        row = pd.concat([existing, row], ignore_index=True)
+    row.to_csv(PASSBOOK_PATH, index=False)
+
+
+def main() -> None:
+    snapshot = collect_snapshot()
+    store_status, _ = get_trading_status(snapshot.captured_at)
+    recipient_count = send_reports(snapshot, store_status)
+    append_passbook(snapshot)
+    print(f"Sent {recipient_count} email report(s) and updated {PASSBOOK_PATH}")
+
+
+if __name__ == "__main__":
+    main()
