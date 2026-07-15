@@ -75,7 +75,13 @@ Set the email environment variables only when you intentionally want to send a l
 ## Data files
 
 - `gold_passbook.csv`: automated market history used by the web dashboard
-- `my_holdings.csv`: optional purchases in `Date,Grams,Price_Paid_AUD` format
+- `my_holdings.csv`: purchases in `Date,Item,Grams,Total_Paid_AUD,Source,Notes` format. Add one row per purchase using the total amount paid; the tracker sums grams and total cost automatically. The legacy per-gram `Price_Paid_AUD` format is still accepted.
+
+Example future purchase:
+
+```csv
+2026-08-20,Lingfeng 2g gold bar,2,500.00,Taobao,Stored in China; shipping and tax excluded
+```
 
 ## Planned upgrades
 

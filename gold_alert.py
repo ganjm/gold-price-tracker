@@ -160,13 +160,21 @@ def load_portfolio(path: Path = HOLDINGS_PATH) -> tuple[float, float]:
     if not path.exists():
         return 0.0, 0.0
     holdings = pd.read_csv(path)
-    required = {"Grams", "Price_Paid_AUD"}
-    if not required.issubset(holdings.columns):
-        raise RuntimeError(f"{path} must contain columns: {', '.join(sorted(required))}")
+    if "Grams" not in holdings.columns:
+        raise RuntimeError(f"{path} must contain a Grams column")
+    if "Total_Paid_AUD" not in holdings.columns and "Price_Paid_AUD" not in holdings.columns:
+        raise RuntimeError(f"{path} must contain Total_Paid_AUD or Price_Paid_AUD")
+
     grams = pd.to_numeric(holdings["Grams"], errors="coerce")
-    unit_price = pd.to_numeric(holdings["Price_Paid_AUD"], errors="coerce")
-    valid = grams.notna() & unit_price.notna() & (grams > 0) & (unit_price >= 0)
-    return float(grams[valid].sum()), float((grams[valid] * unit_price[valid]).sum())
+    total_paid = pd.Series(float("nan"), index=holdings.index, dtype="float64")
+    if "Total_Paid_AUD" in holdings.columns:
+        total_paid = pd.to_numeric(holdings["Total_Paid_AUD"], errors="coerce")
+    if "Price_Paid_AUD" in holdings.columns:
+        unit_price = pd.to_numeric(holdings["Price_Paid_AUD"], errors="coerce")
+        total_paid = total_paid.fillna(grams * unit_price)
+
+    valid = grams.notna() & total_paid.notna() & (grams > 0) & (total_paid >= 0)
+    return float(grams[valid].sum()), float(total_paid[valid].sum())
 
 
 def load_taobao_app_prices(
@@ -293,16 +301,17 @@ def taobao_checked_label(snapshot: MarketSnapshot) -> str:
 def taobao_plain_lines(snapshot: MarketSnapshot) -> str:
     if snapshot.taobao_app_checked_on:
         return "\n".join([
-            f"Lingfeng 1g bar (Taobao app): {taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}",
-            f"Lingfeng 5g gold bar (Taobao app): {taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}",
-            f"Lingfeng 5g gold bean (Taobao app): {taobao_price_text(snapshot.taobao_5g_bean_cny, 5, snapshot)}",
-            f"App prices checked: {taobao_checked_label(snapshot)}",
-            f"Public share page (unselected): {taobao_price_text(snapshot.taobao_share_1g_cny, 1, snapshot)}",
+            f"Lingfeng 1g bar: {taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}",
+            f"Lingfeng 5g gold bar: {taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}",
+            f"Lingfeng 5g gold bean: {taobao_price_text(snapshot.taobao_5g_bean_cny, 5, snapshot)}",
+            f"Prices checked: {taobao_checked_label(snapshot)}",
+            f"Product: {DEFAULT_TAOBAO_1G_URL}",
         ])
     return "\n".join([
         f"Lingfeng 1g public share price: {taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}",
         f"Lingfeng 5g (5× 1g estimate): {taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}",
-        "Selected Taobao app SKU prices were not recently verified.",
+        "Variant prices were not recently verified.",
+        f"Product: {DEFAULT_TAOBAO_1G_URL}",
     ])
 
 
@@ -331,10 +340,13 @@ def build_chinese_summary(snapshot: MarketSnapshot, store_status: str) -> str:
 珀斯铸币局：{store_status}
 1克金条：{price_text(snapshot.pm_1g, 1, snapshot.spot_aud)}
 5克金条：{price_text(snapshot.pm_5g, 5, snapshot.spot_aud)}
+珀斯铸币局1克链接：{PM_1G_URL}
+珀斯铸币局5克链接：{PM_5G_URL}
 淘宝领丰金1克金条：{taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)}
 淘宝领丰金5克金条：{taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)}
 淘宝领丰金5克金豆：{taobao_price_text(snapshot.taobao_5g_bean_cny, 5, snapshot)}
-淘宝应用内价格核对日期：{taobao_checked_label(snapshot)}
+淘宝价格核对日期：{taobao_checked_label(snapshot)}
+淘宝商品链接：{DEFAULT_TAOBAO_1G_URL}
 持仓：{snapshot.portfolio_grams:g}克 | 成本 A${snapshot.portfolio_cost_aud:,.2f} | 市值 A${market_value:,.2f} | 浮动盈亏 A${profit:+,.2f}（{return_pct:+.1f}%）
 仅供市场跟踪，不构成投资建议。"""
 
@@ -358,8 +370,8 @@ Daily move: {snapshot.daily_change_pct:+.2f}%
 
 PERTH MINT
 Store: {store_status}
-1g bar: {price_text(snapshot.pm_1g, 1, snapshot.spot_aud)}
-5g bar: {price_text(snapshot.pm_5g, 5, snapshot.spot_aud)}
+1g bar: {price_text(snapshot.pm_1g, 1, snapshot.spot_aud)} — {PM_1G_URL}
+5g bar: {price_text(snapshot.pm_5g, 5, snapshot.spot_aud)} — {PM_5G_URL}
 
 TAOBAO PRICES
 {taobao_plain_lines(snapshot)}
@@ -374,10 +386,17 @@ This is a market-tracking alert, not financial advice. Retail prices may change 
 """ + (f"\n中文摘要\n{build_chinese_summary(snapshot, store_status)}\n" if bilingual else "")
 
 
-def metric_row(label: str, value: str) -> str:
+def metric_row(label: str, value: str, href: str | None = None) -> str:
+    label_html = html.escape(label)
+    value_html = html.escape(value)
+    if href:
+        safe_href = html.escape(href, quote=True)
+        link_style = "color:#2563eb;text-decoration:underline;"
+        label_html = f'<a href="{safe_href}" style="{link_style}">{label_html}</a>'
+        value_html = f'<a href="{safe_href}" style="{link_style}font-weight:700;">{value_html}</a>'
     return (
         '<tr><td style="padding:8px 0;color:#64748b;font-size:14px;">'
-        f"{html.escape(label)}</td><td style=\"padding:8px 0;text-align:right;font-weight:700;font-size:14px;\">{html.escape(value)}</td></tr>"
+        f"{label_html}</td><td style=\"padding:8px 0;text-align:right;font-weight:700;font-size:14px;\">{value_html}</td></tr>"
     )
 
 
@@ -395,22 +414,21 @@ def build_html_report(snapshot: MarketSnapshot, store_status: str, bilingual: bo
     ])
     mint_rows = "".join([
         metric_row("Store", store_status),
-        metric_row("1g minted bar", price_text(snapshot.pm_1g, 1, snapshot.spot_aud)),
-        metric_row("5g minted bar", price_text(snapshot.pm_5g, 5, snapshot.spot_aud)),
+        metric_row("1g minted bar", price_text(snapshot.pm_1g, 1, snapshot.spot_aud), PM_1G_URL),
+        metric_row("5g minted bar", price_text(snapshot.pm_5g, 5, snapshot.spot_aud), PM_5G_URL),
     ])
     if snapshot.taobao_app_checked_on:
         taobao_rows = "".join([
-            metric_row("Lingfeng 1g bar (app)", taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)),
-            metric_row("Lingfeng 5g gold bar (app)", taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)),
-            metric_row("Lingfeng 5g gold bean (app)", taobao_price_text(snapshot.taobao_5g_bean_cny, 5, snapshot)),
-            metric_row("App prices checked", taobao_checked_label(snapshot)),
-            metric_row("Public share page (unselected)", taobao_price_text(snapshot.taobao_share_1g_cny, 1, snapshot)),
+            metric_row("Lingfeng 1g bar", taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot), DEFAULT_TAOBAO_1G_URL),
+            metric_row("Lingfeng 5g gold bar", taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot), DEFAULT_TAOBAO_1G_URL),
+            metric_row("Lingfeng 5g gold bean", taobao_price_text(snapshot.taobao_5g_bean_cny, 5, snapshot), DEFAULT_TAOBAO_1G_URL),
+            metric_row("Prices checked", taobao_checked_label(snapshot)),
         ])
     else:
         taobao_rows = "".join([
             metric_row("Lingfeng 1g public share price", taobao_price_text(snapshot.taobao_1g_cny, 1, snapshot)),
             metric_row("Lingfeng 5g (5× estimate)", taobao_price_text(snapshot.taobao_5g_cny, 5, snapshot)),
-            metric_row("SKU verification", "Selected app prices not recently verified"),
+            metric_row("SKU verification", "Variant prices not recently verified"),
         ])
     portfolio_rows = "".join([
         metric_row("Gold held", f"{snapshot.portfolio_grams:g}g"),

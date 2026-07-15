@@ -121,6 +121,19 @@ class EmailTests(unittest.TestCase):
         )
         self.assertIn("STALE", gold_alert.taobao_checked_label(market))
 
+    def test_retail_price_rows_link_to_product_pages_without_source_noise(self):
+        market = gold_alert.MarketSnapshot(
+            **{**snapshot().__dict__, "taobao_1g_cny": 903, "taobao_5g_cny": 4500,
+               "taobao_5g_bean_cny": 4510, "taobao_share_1g_cny": 909,
+               "taobao_app_checked_on": "15 Jul 2026"}
+        )
+        report = gold_alert.build_html_report(market, "Open", bilingual=False)
+        self.assertIn(gold_alert.PM_1G_URL, report)
+        self.assertIn(gold_alert.PM_5G_URL, report)
+        self.assertIn(gold_alert.DEFAULT_TAOBAO_1G_URL.replace("&", "&amp;"), report)
+        self.assertNotIn("(app)", report)
+        self.assertNotIn("Public share page", report)
+
 
 class PassbookTests(unittest.TestCase):
     def test_append_creates_one_header_and_multiple_rows(self):
@@ -143,6 +156,19 @@ class PassbookTests(unittest.TestCase):
             grams, cost = gold_alert.load_portfolio(path)
             self.assertEqual(grams, 5)
             self.assertEqual(cost, 1190)
+
+    def test_portfolio_accepts_total_purchase_price(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "holdings.csv"
+            path.write_text(
+                "Date,Item,Grams,Total_Paid_AUD,Source,Notes\n"
+                "2026-03-10,Lingfeng 5g gold bar,5,1190,Taobao,Stored in China\n"
+                "2026-08-20,Gold bar,2,500,Other,Future purchase\n",
+                encoding="utf-8",
+            )
+            grams, cost = gold_alert.load_portfolio(path)
+            self.assertEqual(grams, 7)
+            self.assertEqual(cost, 1690)
 
 
 if __name__ == "__main__":
