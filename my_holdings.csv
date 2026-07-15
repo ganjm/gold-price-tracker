@@ -1,2 +1,2 @@
-Date,Grams,Price_Paid_AUD
-2026-03-10,5,238.00
+Date,Item,Grams,Total_Paid_AUD,Source,Notes
+2026-03-10,Lingfeng 5g gold bar,5,1190.00,Taobao,Stored in China; shipping and tax excluded
