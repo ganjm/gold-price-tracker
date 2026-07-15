@@ -56,6 +56,12 @@ class SignalTests(unittest.TestCase):
 
 
 class EmailTests(unittest.TestCase):
+    def test_perth_mint_parser_reads_json_ld_offer(self):
+        page = """<script type="application/ld+json">
+        {"@type":"Product","offers":{"@type":"Offer","priceCurrency":"AUD","price":"226.48"}}
+        </script>"""
+        self.assertEqual(gold_alert.parse_perth_mint_price(page), 226.48)
+
     def test_message_contains_plain_text_and_html(self):
         message = gold_alert.build_message(
             snapshot(), "Open — Mon–Fri 9am–5pm", "sender@example.com", "reader@example.com"
@@ -75,6 +81,15 @@ class EmailTests(unittest.TestCase):
     def test_taobao_share_price_parser(self):
         page = '<a href="item.htm?id=992105119294&amp;price=909&amp;sourceType=item">item</a>'
         self.assertEqual(gold_alert.parse_taobao_share_price(page), 909.0)
+
+    @patch("gold_alert.requests.get")
+    def test_fetch_taobao_visible_price_requests_and_parses_share_page(self, mock_get):
+        response = mock_get.return_value
+        response.text = '<a href="item.htm?id=992105119294&amp;price=909&amp;sourceType=item">item</a>'
+
+        self.assertEqual(gold_alert.fetch_taobao_visible_price("https://e.tb.cn/example"), 909.0)
+        response.raise_for_status.assert_called_once_with()
+        mock_get.assert_called_once()
 
     def test_taobao_price_includes_currency_conversion_and_premium(self):
         text = gold_alert.taobao_price_text(500, 1, snapshot(spot=100))

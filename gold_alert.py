@@ -1,4 +1,5 @@
 import html
+import json
 import os
 import re
 import smtplib
@@ -80,6 +81,39 @@ def fetch_history(symbol: str, period: str) -> pd.DataFrame:
     return history.loc[close.index]
 
 
+def parse_perth_mint_price(page: str) -> float | None:
+    soup = BeautifulSoup(page, "html.parser")
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            payload = json.loads(script.string or script.get_text())
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        products = payload if isinstance(payload, list) else [payload]
+        for product in products:
+            if not isinstance(product, dict) or product.get("@type") != "Product":
+                continue
+            offers = product.get("offers", [])
+            offers = offers if isinstance(offers, list) else [offers]
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+                try:
+                    price = float(str(offer.get("price", "")).replace(",", ""))
+                except ValueError:
+                    continue
+                if price > 0 and offer.get("priceCurrency", "AUD") == "AUD":
+                    return price
+
+    price_tag = soup.find("span", class_="price")
+    if not price_tag:
+        return None
+    try:
+        return float(price_tag.get_text(strip=True).replace("$", "").replace(",", ""))
+    except ValueError:
+        return None
+
+
 def fetch_perth_mint_price(url: str) -> float | None:
     try:
         response = requests.get(
@@ -88,11 +122,8 @@ def fetch_perth_mint_price(url: str) -> float | None:
             timeout=15,
         )
         response.raise_for_status()
-        price_tag = BeautifulSoup(response.text, "html.parser").find("span", class_="price")
-        if not price_tag:
-            return None
-        return float(price_tag.get_text(strip=True).replace("$", "").replace(",", ""))
-    except (requests.RequestException, AttributeError, TypeError, ValueError):
+        return parse_perth_mint_price(response.text)
+    except requests.RequestException:
         return None
 
 
@@ -104,6 +135,20 @@ def parse_taobao_share_price(page: str) -> float | None:
 
 def fetch_taobao_visible_price(url: str) -> float | None:
     if not url:
+        return None
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        return parse_taobao_share_price(response.text)
+    except requests.RequestException:
         return None
 
 
@@ -118,19 +163,6 @@ def load_portfolio(path: Path = HOLDINGS_PATH) -> tuple[float, float]:
     unit_price = pd.to_numeric(holdings["Price_Paid_AUD"], errors="coerce")
     valid = grams.notna() & unit_price.notna() & (grams > 0) & (unit_price >= 0)
     return float(grams[valid].sum()), float((grams[valid] * unit_price[valid]).sum())
-    try:
-        response = requests.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        return parse_taobao_share_price(response.text)
-    except requests.RequestException:
-        return None
 
 
 def collect_snapshot(now: datetime | None = None) -> MarketSnapshot:
