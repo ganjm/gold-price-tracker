@@ -9,7 +9,7 @@ Automated gold-market monitoring for Perth and China. The tracker converts globa
 - Distance from the 50-day and 200-day averages
 - A transparent `BUY ZONE`, `WATCH`, or `WAIT` signal
 - Perth Mint 1g and 5g prices and premiums when scraping is available
-- Taobao Lingfeng 1g visible price plus a clearly labelled 5× estimate for 5g, in CNY and AUD with premium versus CNY spot
+- Taobao public share-page price plus dated, app-verified 1g bar, 5g bar, and 5g bean prices in CNY and AUD
 - Personal holdings cost basis, spot value, and unrealized P/L
 - Perth-local store status, including 2026 WA public holidays
 - Responsive HTML plus a plain-text fallback
@@ -45,6 +45,8 @@ Optional repository variables:
 | --- | --- |
 | `TAOBAO_1G_URL` | Override the built-in Lingfeng 1g share link |
 | `TAOBAO_5G_URL` | Lingfeng 5g Taobao share link |
+
+Taobao share pages can expose an unselected or teaser price that differs from the selected SKU in the app. Record app-verified prices in `taobao_app_prices.csv` using variants `1g_bar`, `5g_bar`, and `5g_bean`. The email labels the check date and warns when it is more than seven days old; the public share-page price remains a separate automated reference.
 
 Under **Settings → Actions → General → Workflow permissions**, enable **Read and write permissions** so the workflow can update the passbook.
 

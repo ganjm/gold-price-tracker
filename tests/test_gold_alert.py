@@ -97,6 +97,30 @@ class EmailTests(unittest.TestCase):
         self.assertIn("A$100.00", text)
         self.assertIn("+0.0%", text)
 
+    def test_taobao_app_prices_use_latest_complete_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "taobao_app_prices.csv"
+            path.write_text(
+                "Date,Variant,Price_CNY\n"
+                "2026-07-14,1g_bar,909\n"
+                "2026-07-15,1g_bar,903\n"
+                "2026-07-15,5g_bar,4500\n"
+                "2026-07-15,5g_bean,4510\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                gold_alert.load_taobao_app_prices(path),
+                (903.0, 4500.0, 4510.0, "15 Jul 2026"),
+            )
+
+    def test_taobao_app_price_date_is_marked_stale_after_seven_days(self):
+        market = snapshot()
+        market = gold_alert.MarketSnapshot(
+            **{**market.__dict__, "captured_at": datetime(2026, 7, 24, 10, tzinfo=PERTH),
+               "taobao_app_checked_on": "15 Jul 2026"}
+        )
+        self.assertIn("STALE", gold_alert.taobao_checked_label(market))
+
 
 class PassbookTests(unittest.TestCase):
     def test_append_creates_one_header_and_multiple_rows(self):
