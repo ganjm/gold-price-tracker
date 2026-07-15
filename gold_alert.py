@@ -24,6 +24,7 @@ TAOBAO_APP_PRICES_PATH = Path("taobao_app_prices.csv")
 PM_1G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-1g-minted-gold-bar/"
 PM_5G_URL = "https://www.perthmint.com/shop/bullion/minted-bars/kangaroo-5g-minted-gold-bar/"
 DEFAULT_TAOBAO_1G_URL = "https://e.tb.cn/h.8ZEbY3FydVeQvrb?tk=5wG9gJeMRuD"
+RECORD_PURCHASE_URL = "https://github.com/ganjm/gold-price-tracker/actions/workflows/record_purchase.yml"
 
 WA_HOLIDAYS_2026 = {
     "2026-01-01": "New Year's Day",
@@ -348,6 +349,7 @@ def build_chinese_summary(snapshot: MarketSnapshot, store_status: str) -> str:
 淘宝价格核对日期：{taobao_checked_label(snapshot)}
 淘宝商品链接：{DEFAULT_TAOBAO_1G_URL}
 持仓：{snapshot.portfolio_grams:g}克 | 成本 A${snapshot.portfolio_cost_aud:,.2f} | 市值 A${market_value:,.2f} | 浮动盈亏 A${profit:+,.2f}（{return_pct:+.1f}%）
+记录新的黄金购买：{RECORD_PURCHASE_URL}
 仅供市场跟踪，不构成投资建议。"""
 
 
@@ -381,6 +383,7 @@ Gold: {snapshot.portfolio_grams:g}g
 Cost basis: ${snapshot.portfolio_cost_aud:,.2f} AUD
 Spot value: ${market_value:,.2f} AUD
 Unrealized P/L: ${profit:+,.2f} AUD ({return_pct:+.1f}%)
+Record a purchase: {RECORD_PURCHASE_URL}
 
 This is a market-tracking alert, not financial advice. Retail prices may change before purchase.
 """ + (f"\n中文摘要\n{build_chinese_summary(snapshot, store_status)}\n" if bilingual else "")
@@ -468,6 +471,7 @@ def build_html_report(snapshot: MarketSnapshot, store_status: str, bilingual: bo
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{taobao_rows}</table>
   <h2 style="font-size:16px;margin:26px 0 8px;">Your holdings</h2>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{portfolio_rows}</table>
+  <div style="margin-top:14px;"><a href="{html.escape(RECORD_PURCHASE_URL, quote=True)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;">Record a purchase</a></div>
   {chinese_card}
   <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:11px;line-height:1.5;">
     Market-tracking alert only; not financial advice. Retail prices may change before purchase.

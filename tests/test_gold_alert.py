@@ -131,6 +131,7 @@ class EmailTests(unittest.TestCase):
         self.assertIn(gold_alert.PM_1G_URL, report)
         self.assertIn(gold_alert.PM_5G_URL, report)
         self.assertIn(gold_alert.DEFAULT_TAOBAO_1G_URL.replace("&", "&amp;"), report)
+        self.assertIn(gold_alert.RECORD_PURCHASE_URL, report)
         self.assertNotIn("(app)", report)
         self.assertNotIn("Public share page", report)
 

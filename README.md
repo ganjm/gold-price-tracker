@@ -77,6 +77,8 @@ Set the email environment variables only when you intentionally want to send a l
 - `gold_passbook.csv`: automated market history used by the web dashboard
 - `my_holdings.csv`: purchases in `Date,Item,Grams,Total_Paid_AUD,Source,Notes` format. Add one row per purchase using the total amount paid; the tracker sums grams and total cost automatically. The legacy per-gram `Price_Paid_AUD` format is still accepted.
 
+For normal use, do not edit the CSV. Open **Actions → Record Gold Purchase → Run workflow**, complete the form, and submit it. The form validates the purchase, avoids exact duplicates, and saves it to the ledger automatically. Alert emails also include a **Record a purchase** button that opens this form.
+
 Example future purchase:
 
 ```csv
