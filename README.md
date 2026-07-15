@@ -48,13 +48,13 @@ Optional repository variables:
 
 Under **Settings → Actions → General → Workflow permissions**, enable **Read and write permissions** so the workflow can update the passbook.
 
-The fallback GitHub schedule runs at 10:17 AM and 3:17 PM AWST, Monday–Saturday. Moving away from the top of the hour reduces delays but cannot eliminate them.
+The workflow is intentionally manual-dispatch only. A free Cloudflare Worker Cron Trigger dispatches it at 10:00 AM and 3:00 PM AWST, Monday–Saturday, using `0 2,7 * * 2-7` (Cloudflare cron uses UTC and numbers Sunday as day 1). Keeping the GitHub `schedule` trigger disabled prevents duplicate emails.
 
 ## Exact-time, zero-cost scheduling
 
 For more reliable timing without a paid service:
 
-1. **Cloudflare Worker Cron Trigger (recommended cloud option):** the free plan can dispatch this workflow at 02:00 and 07:00 UTC. Store a fine-grained GitHub token as an encrypted Worker secret with access only to this repository and `Actions: write`.
+1. **Cloudflare Worker Cron Trigger (configured cloud option):** the free plan dispatches this workflow at 02:00 and 07:00 UTC, Monday–Saturday. The Worker uses a fine-grained GitHub token stored as the encrypted `GITHUB_TOKEN` secret, restricted to this repository with `Actions: write`.
 2. **Windows Task Scheduler:** run `python gold_alert.py` at 10:00 AM and 3:00 PM on an always-on computer. This avoids third-party tokens but depends on that computer and internet connection.
 
 Do not enable both schedulers without adding duplicate-delivery protection.
