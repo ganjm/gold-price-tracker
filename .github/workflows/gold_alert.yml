@@ -2,41 +2,52 @@ name: Daily Gold Alert
 
 on:
   schedule:
-    # 02:00 UTC = 10:00 AM AWST (Perth)
-    # 07:00 UTC = 03:00 PM AWST (Perth)
-    # 1-6 = Monday to Saturday
-    - cron: '0 2,7 * * 1-6'
+    # 10:17 AM and 3:17 PM AWST, Monday to Saturday.
+    # Scheduling away from the top of the hour reduces GitHub Actions delays.
+    - cron: '17 2,7 * * 1-6'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: daily-gold-alert
+  cancel-in-progress: false
+
 jobs:
   check-gold-price:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
+          cache: pip
 
-      - name: Install Dependencies
-        run: pip install yfinance pandas beautifulsoup4 requests
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Run Gold Alert Script
+      - name: Run gold alert
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SECONDARY_GMAIL_ADDRESS: ${{ secrets.SECONDARY_GMAIL_ADDRESS }}
+          TAOBAO_1G_URL: ${{ vars.TAOBAO_1G_URL }}
+          TAOBAO_5G_URL: ${{ vars.TAOBAO_5G_URL }}
         run: python gold_alert.py
 
-      - name: Commit and Push Passbook
+      - name: Commit updated passbook
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add gold_passbook.csv
-          git commit -m "Update Gold Passbook [skip ci]" || echo "No changes to commit"
-          git push
+          if git diff --cached --quiet; then
+            echo "No passbook change to commit"
+          else
+            git commit -m "chore: update gold passbook [skip ci]"
+            git push
+          fi
